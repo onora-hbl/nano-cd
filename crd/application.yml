@@ -73,6 +73,8 @@ spec:
             status:
               type: object
               properties:
+                lastObservedGeneration:
+                  type: number
                 syncStatus:
                   type: string
                   enum: [Synced, OutOfSync, Syncing]

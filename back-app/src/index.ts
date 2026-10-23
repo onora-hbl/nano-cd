@@ -4,6 +4,8 @@ import { NanoCdError } from './utils/errors.js'
 import logger from './utils/logger.js'
 import k8sInterfacePlugin from './k8sPlugin.js'
 import applicationCrdCachePlugin from './ApplicationCrdCache.js'
+import syncSchedulerPlugin from './SyncScheduler.js'
+import syncManagerPlugin from './SyncManager.js'
 
 const PORT = 3000
 
@@ -17,6 +19,8 @@ async function main() {
   })
 
   await app.register(k8sInterfacePlugin)
+  await app.register(syncSchedulerPlugin)
+  await app.register(syncManagerPlugin)
   await app.register(applicationCrdCachePlugin)
 
   app.setErrorHandler<FastifyError | NanoCdError | Error>((error, request, reply) => {

@@ -3,6 +3,8 @@ import fp from 'fastify-plugin'
 import type { Duration, K8sInterface, PersistedMetadata, Timestamp } from './k8sPlugin.js'
 import { makeInformer, type Informer, type KubernetesListObject, type KubernetesObject } from '@kubernetes/client-node'
 import logger from './utils/logger.js'
+import type { SyncScheduler } from './SyncScheduler.js'
+import type { SyncManager } from './SyncManager.js'
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -34,6 +36,7 @@ export interface ApplicationSpec {
 export type ApplicationSyncStatus = 'Synced' | 'OutOfSync' | 'Unknown'
 
 export interface ApplicationStatus {
+  lastObservedGeneration?: number
   syncStatus?: ApplicationSyncStatus
   lastSyncedCommit?: string
   lastSyncTime?: Timestamp
@@ -48,21 +51,46 @@ export interface ApplicationCrd extends KubernetesObject {
 export class ApplicationCrdCache {
   private informer: Informer<ApplicationCrd> | null = null
   private childLogger
+  private cache: Record<string, ApplicationCrd> = {}
 
-  constructor(private k8sInterface: K8sInterface) {
+  constructor(
+    private k8sInterface: K8sInterface,
+    private syncScheduler: SyncScheduler,
+    private syncManager: SyncManager,
+  ) {
     this.childLogger = logger.child({ component: 'ApplicationCrdCache' })
   }
 
+  private async syncApp(uid: string) {
+    if (this.cache[uid] == null) {
+      return
+    }
+
+    await this.syncManager.syncApplication(this.cache[uid])
+  }
+
   private onAdd(app: ApplicationCrd) {
-    this.childLogger.debug('Application added: %o', app)
+    this.childLogger.debug(`Application added: ${app.metadata.name}`)
+    this.cache[app.metadata.uid] = app
+    this.syncScheduler.schedule(app, () => this.syncApp(app.metadata.uid))
   }
 
   private onUpdate(app: ApplicationCrd) {
-    this.childLogger.debug('Application updated: %o', app)
+    if (app.metadata.deletionTimestamp != null) {
+      return
+    }
+    if (app.status?.lastObservedGeneration === app.metadata.generation) {
+      return
+    }
+    this.childLogger.debug(`Application updated: ${app.metadata.name}`)
+    this.cache[app.metadata.uid] = app
+    this.syncScheduler.schedule(app, () => this.syncApp(app.metadata.uid))
   }
 
   private onDelete(app: ApplicationCrd) {
-    this.childLogger.debug('Application deleted: %o', app)
+    this.childLogger.debug(`Application deleted: ${app.metadata.name}`)
+    delete this.cache[app.metadata.uid]
+    this.syncScheduler.unschedule(app)
   }
 
   public async initialize() {
@@ -98,7 +126,7 @@ export class ApplicationCrdCache {
 }
 
 const ApplicationCrdCachePlugin: FastifyPluginAsync = async (fastify) => {
-  const applicationCrdCache = new ApplicationCrdCache(fastify.k8sInterface)
+  const applicationCrdCache = new ApplicationCrdCache(fastify.k8sInterface, fastify.syncScheduler, fastify.syncManager)
 
   fastify.decorate('applicationCrdCache', applicationCrdCache)
 

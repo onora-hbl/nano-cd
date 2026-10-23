@@ -2,6 +2,8 @@ import type { JsonSchemaToTsProvider } from '@fastify/type-provider-json-schema-
 import Fastify, { type FastifyError } from 'fastify'
 import { NanoCdError } from './utils/errors.js'
 import logger from './utils/logger.js'
+import k8sInterfacePlugin from './k8sPlugin.js'
+import applicationCrdCachePlugin from './ApplicationCrdCache.js'
 
 const PORT = 3000
 
@@ -13,6 +15,9 @@ async function main() {
   app.addHook('onReady', () => {
     isAppReady = true
   })
+
+  await app.register(k8sInterfacePlugin)
+  await app.register(applicationCrdCachePlugin)
 
   app.setErrorHandler<FastifyError | NanoCdError | Error>((error, request, reply) => {
     if (error instanceof NanoCdError) {
@@ -77,6 +82,8 @@ async function main() {
     port: PORT,
   })
   logger.info(`Nano CD is running on port ${String(PORT)}`)
+
+  await app.applicationCrdCache.initialize()
 }
 
 main().catch((err: unknown) => {

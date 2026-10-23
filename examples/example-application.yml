@@ -1,0 +1,14 @@
+apiVersion: nanocd.ozyria.fr/v1
+kind: Application
+metadata:
+  name: test-app
+  namespace: nanocd-system
+spec:
+  repo: https://github.com/onora-hbl/nano-cd
+  branch: main
+  source:
+    type: raw
+    path: examples/app
+  sync:
+    interval: 60s
+  prune: false

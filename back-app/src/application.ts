@@ -1,0 +1,38 @@
+import type { KubernetesObject } from '@kubernetes/client-node'
+import type { Duration, PersistedMetadata, Timestamp } from './K8sInterface.js'
+
+export const GROUP = 'nanocd.ozyria.fr'
+export const VERSION = 'v1'
+export const PLURAL = 'applications'
+
+export type ApplicationSourceType = 'raw' | 'helm'
+
+export interface ApplicationSpec {
+  repo: string
+  branch: string
+  authSecretRef?: string
+  source: {
+    type: ApplicationSourceType
+    path: string
+  }
+  sync: {
+    interval: Duration
+    paused: boolean
+  }
+  prune: boolean
+}
+
+export type ApplicationSyncStatus = 'Synced' | 'OutOfSync' | 'Unknown'
+
+export interface ApplicationStatus {
+  lastObservedGeneration?: number
+  syncStatus?: ApplicationSyncStatus
+  lastSyncedCommit?: string
+  lastSyncTime?: Timestamp
+}
+
+export interface ApplicationCrd extends KubernetesObject {
+  metadata: PersistedMetadata
+  spec: ApplicationSpec
+  status?: ApplicationStatus
+}

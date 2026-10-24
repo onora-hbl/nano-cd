@@ -1,12 +1,5 @@
-import type { FastifyPluginAsync } from 'fastify'
-import fp from 'fastify-plugin'
-import type { ApplicationCrd } from './ApplicationCrdCache.js'
-
-declare module 'fastify' {
-  interface FastifyInstance {
-    syncScheduler: SyncScheduler
-  }
-}
+import type { ApplicationCrd } from './application.js'
+import logger from './utils/logger.js'
 
 type SyncCallback = () => Promise<void>
 
@@ -15,8 +8,13 @@ interface AppSchedule {
   callback: SyncCallback
 }
 
-export class SyncScheduler {
-  private schedules: Record<string, AppSchedule> = {}
+export class SyncScheduler implements Disposable {
+  private childLogger
+  private schedules = new Map<string, AppSchedule>()
+
+  constructor() {
+    this.childLogger = logger.child({ component: 'SyncScheduler' })
+  }
 
   private parseDuration(duration: string): number {
     const unit = duration.slice(-1)
@@ -33,42 +31,29 @@ export class SyncScheduler {
   }
 
   public schedule(application: ApplicationCrd, callback: SyncCallback) {
-    if (this.schedules[application.metadata.uid] != null) {
-      clearInterval(this.schedules[application.metadata.uid]!.interval)
-      delete this.schedules[application.metadata.uid]
-    }
+    this.unschedule(application)
 
     const frequencyMs = this.parseDuration(application.spec.sync.interval)
-    const interval = setInterval(callback, frequencyMs)
-    this.schedules[application.metadata.uid] = {
-      interval,
-      callback,
-    }
+    const interval = setInterval(() => {
+      callback().catch((err: unknown) => {
+        this.childLogger.error({ err }, `Scheduled sync failed: ${application.metadata.name}`)
+      })
+    }, frequencyMs)
+    this.schedules.set(application.metadata.uid, { interval, callback })
   }
 
   public unschedule(application: ApplicationCrd) {
-    if (this.schedules[application.metadata.uid] != null) {
-      clearInterval(this.schedules[application.metadata.uid]!.interval)
-      delete this.schedules[application.metadata.uid]
+    const schedule = this.schedules.get(application.metadata.uid)
+    if (schedule != null) {
+      clearInterval(schedule.interval)
+      this.schedules.delete(application.metadata.uid)
     }
   }
 
-  public async [Symbol.dispose]() {
-    for (const uid in this.schedules) {
-      clearInterval(this.schedules[uid]!.interval)
+  public [Symbol.dispose]() {
+    for (const { interval } of this.schedules.values()) {
+      clearInterval(interval)
     }
+    this.schedules.clear()
   }
 }
-
-const SyncSchedulerPlugin: FastifyPluginAsync = async (fastify) => {
-  const syncScheduler = new SyncScheduler()
-
-  fastify.decorate('syncScheduler', syncScheduler)
-
-  fastify.addHook('onClose', (_instance, done) => {
-    syncScheduler[Symbol.dispose]()
-    done()
-  })
-}
-
-export default fp(SyncSchedulerPlugin)

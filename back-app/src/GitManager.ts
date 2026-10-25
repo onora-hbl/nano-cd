@@ -36,9 +36,21 @@ class GitRepo {
     return res
   }
 
+  private fetchPromise: Promise<void> | null = null
   async fetch(branch: string): Promise<void> {
-    if (!existsSync(this.localDir)) await this.git('init', '--bare', this.localDir)
-    await this.gitIn('fetch', this.url, `+refs/heads/${branch}:refs/heads/${branch}`)
+    let currentRequest = this.fetchPromise
+    if (currentRequest != null) {
+      return await currentRequest
+    }
+
+    currentRequest = new Promise(async (resolve) => {
+      if (!existsSync(this.localDir)) await this.git('init', '--bare', this.localDir)
+      await this.gitIn('fetch', this.url, `+refs/heads/${branch}:refs/heads/${branch}`)
+      resolve()
+    })
+    this.fetchPromise = currentRequest
+    await currentRequest
+    this.fetchPromise = null
   }
 
   async hasCommit(sha: string): Promise<boolean> {
@@ -64,10 +76,23 @@ class GitRepo {
     return output.split('\n').filter(Boolean)
   }
 
+  private hasChangesPromise: Promise<boolean> | null = null
   async hasChanges(from: string | undefined, to: string, path: string): Promise<boolean> {
-    if (!from || from === to) return from !== to
-    if (!(await this.hasCommit(from))) return true
-    return (await this.changedFiles(from, to, path)).length > 0
+    let currentRequest = this.hasChangesPromise
+    if (currentRequest != null) {
+      return await currentRequest
+    }
+
+    currentRequest = new Promise(async (resolve) => {
+      if (!from || from === to) return from !== to
+      if (!(await this.hasCommit(from))) return true
+      resolve((await this.changedFiles(from, to, path)).length > 0)
+    })
+
+    this.hasChangesPromise = currentRequest
+    const res = await currentRequest
+    this.hasChangesPromise = null
+    return res
   }
 
   private gitIn(...args: string[]): Promise<string> {
@@ -104,7 +129,7 @@ export class GitManager implements Disposable {
     const key = `${app.spec.repo}:${app.spec.authSecretRef ?? 'NO_TOKEN'}`
     if (this.repoCache[key] == null) {
       const localPath =
-        '/var/data/nanocd/repositories/' + app.spec.repo.replaceAll('/', '_').replaceAll(':', '_').replaceAll('.', '_')
+        '/tmp/nanocd/repositories/' + app.spec.repo.replaceAll('/', '_').replaceAll(':', '_').replaceAll('.', '_')
       this.repoCache[key] = new GitRepo(
         app.spec.repo,
         localPath,
@@ -119,6 +144,24 @@ export class GitManager implements Disposable {
     const repo = this.getOrCreateRepo(app)
     const latestCommit = await repo.latestCommit(app.spec.branch)
     return latestCommit
+  }
+
+  public async fetchRepo(app: ApplicationCrd): Promise<void> {
+    const repo = this.getOrCreateRepo(app)
+    await repo.fetch(app.spec.branch)
+  }
+
+  public async hasChanges(app: ApplicationCrd, from: string | undefined, to: string): Promise<boolean> {
+    const repo = this.getOrCreateRepo(app)
+    return await repo.hasChanges(from, to, app.spec.source.path)
+  }
+
+  public async collectManifests(app: ApplicationCrd, head: string): Promise<string[]> {
+    const repo = this.getOrCreateRepo(app)
+    const fileNames = await repo
+      .listFiles(head, app.spec.source.path)
+      .then((files) => files.filter((file) => file.endsWith('.yaml') || file.endsWith('.yml')))
+    return Promise.all(fileNames.map((file) => repo.readFile(head, file)))
   }
 
   public [Symbol.dispose]() {}

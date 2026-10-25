@@ -36,9 +36,26 @@ export class SyncManager implements Disposable {
     )
   }
 
-  private async doSync(app: ApplicationCrd) {}
+  private async doSync(app: ApplicationCrd, manifests: string[]) {
+    this.childLogger.info(`Syncing application: ${app.metadata.name} with ${manifests.length} manifests`)
+    manifests.forEach((manifest) => console.log(manifest))
+  }
 
-  private async doSyncIfNeeded(app: ApplicationCrd) {
+  private async doSyncIfFileChanges(app: ApplicationCrd, latestCommitSha: string) {
+    await this.gitManager.fetchRepo(app)
+    if (!(await this.gitManager.hasChanges(app, app.status?.lastSyncedCommit, latestCommitSha))) {
+      this.childLogger.debug(`No file changes for application: ${app.metadata.name}`)
+      return
+    }
+    const manifests = await this.gitManager.collectManifests(app, latestCommitSha)
+    if (manifests.length === 0) {
+      this.childLogger.debug(`No manifests found for application: ${app.metadata.name}`)
+      return
+    }
+    this.doSync(app, manifests)
+  }
+
+  private async doSyncIfNewCommit(app: ApplicationCrd) {
     const latestCommitSha = await this.gitManager.getLatestCommitSha(app)
     if (latestCommitSha === app.status?.lastSyncedCommit) {
       this.childLogger.debug(`No new commit for application: ${app.metadata.name}`)
@@ -48,7 +65,7 @@ export class SyncManager implements Disposable {
     await this.updateStatus(app, {
       syncStatus: 'Syncing',
     })
-    await this.doSync(app)
+    await this.doSyncIfFileChanges(app, latestCommitSha)
     await this.updateStatus(app, {
       syncStatus: 'Synced',
       lastSyncedCommit: latestCommitSha,
@@ -56,7 +73,6 @@ export class SyncManager implements Disposable {
   }
 
   public async syncApplication(app: ApplicationCrd) {
-    // console.log(app)
     if (this.syncInProgress.has(app.metadata.uid)) {
       return
     }
@@ -64,7 +80,7 @@ export class SyncManager implements Disposable {
 
     try {
       this.childLogger.debug(`Syncing application: ${app.metadata.name}`)
-      await this.doSyncIfNeeded(app)
+      await this.doSyncIfNewCommit(app)
       this.childLogger.debug(`Finished syncing application: ${app.metadata.name}`)
       await this.updateStatus(app, { lastObservedGeneration: app.metadata.generation })
     } finally {

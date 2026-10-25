@@ -1,4 +1,10 @@
-import { makeInformer, type Informer, type KubernetesListObject } from '@kubernetes/client-node'
+import {
+  makeInformer,
+  PatchStrategy,
+  setHeaderOptions,
+  type Informer,
+  type KubernetesListObject,
+} from '@kubernetes/client-node'
 import { GROUP, PLURAL, VERSION, type ApplicationCrd } from './application.js'
 import type { K8sInterface } from './K8sInterface.js'
 import type { SyncManager } from './SyncManager.js'
@@ -31,23 +37,43 @@ export class ApplicationCrdCache implements AsyncDisposable {
     await this.syncManager.syncApplication(app)
   }
 
-  private onAdd(app: ApplicationCrd) {
+  private async updateObservedGeneration(app: ApplicationCrd) {
+    await this.k8sInterface.CustomObjectApi.patchNamespacedCustomObjectStatus(
+      {
+        group: GROUP,
+        version: VERSION,
+        plural: PLURAL,
+        namespace: app.metadata.namespace,
+        name: app.metadata.name,
+        body: {
+          status: {
+            lastObservedGeneration: app.metadata.generation,
+          },
+        },
+      },
+      setHeaderOptions('Content-Type', PatchStrategy.MergePatch),
+    )
+  }
+
+  private async onAdd(app: ApplicationCrd) {
     this.childLogger.debug(`Application added: ${app.metadata.name}`)
     this.cache.set(app.metadata.uid, app)
     this.syncScheduler.schedule(app, () => this.syncApp(app.metadata.uid))
+    await this.updateObservedGeneration(app)
   }
 
-  private onUpdate(app: ApplicationCrd) {
+  private async onUpdate(app: ApplicationCrd) {
     if (app.metadata.deletionTimestamp != null) {
       return
     }
-    if (app.status?.lastObservedGeneration === app.metadata.generation) {
+    if (app.status?.lastObservedGeneration !== app.metadata.generation) {
       this.syncScheduler.schedule(app, () => this.syncApp(app.metadata.uid))
+      await this.updateObservedGeneration(app)
     }
     this.cache.set(app.metadata.uid, app)
   }
 
-  private onDelete(app: ApplicationCrd) {
+  private async onDelete(app: ApplicationCrd) {
     this.childLogger.debug(`Application deleted: ${app.metadata.name}`)
     this.cache.delete(app.metadata.uid)
     this.syncScheduler.unschedule(app)

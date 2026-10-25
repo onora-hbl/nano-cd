@@ -152,7 +152,6 @@ export class SyncManager implements Disposable {
       this.childLogger.debug(`Syncing application: ${app.metadata.name}`)
       await this.doSyncIfNewCommit(app)
       this.childLogger.debug(`Finished syncing application: ${app.metadata.name}`)
-      await this.updateStatus(app, { lastObservedGeneration: app.metadata.generation })
     } finally {
       this.syncInProgress.delete(app.metadata.uid)
     }

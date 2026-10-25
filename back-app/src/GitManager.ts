@@ -3,9 +3,12 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { ApplicationCrd } from './application.js'
 import { existsSync } from 'node:fs'
-import { v4 as uuid } from 'uuid'
+import { createHash } from 'node:crypto'
+import { join } from 'node:path'
 
 const exec = promisify(execFile)
+
+const REPOSITORIES_DIR = '/tmp/nanocd/repositories'
 
 type GitTokenFactory = () => string
 
@@ -84,6 +87,7 @@ class GitRepo {
 export class GitManager implements Disposable {
   private childLogger
   private repoCache: Record<string, GitRepo> = {}
+  private inflight = new Map<string, Promise<unknown>>()
 
   constructor() {
     this.childLogger = logger.child({ component: 'GitManager' })
@@ -92,81 +96,51 @@ export class GitManager implements Disposable {
   private getOrCreateRepo(app: ApplicationCrd): GitRepo {
     const key = `${app.spec.repo}:${app.spec.authSecretRef ?? 'NO_TOKEN'}`
     if (this.repoCache[key] == null) {
-      const localPath = '/tmp/nanocd/repositories/' + uuid()
+      const localPath = join(REPOSITORIES_DIR, createHash('sha256').update(key).digest('hex'))
       this.repoCache[key] = new GitRepo(
         app.spec.repo,
         localPath,
         app.spec.authSecretRef == null ? undefined : () => app.spec.authSecretRef!,
       )
-      this.childLogger.debug(`Created GitRepo for ${key} with localDir ${localPath}`)
+      this.childLogger.debug(`Created GitRepo for ${app.spec.repo} with localDir ${localPath}`)
     }
     return this.repoCache[key]!
   }
 
-  private getlatestCommitShaPromises: Record<string, Promise<string>> = {}
-  public async getLatestCommitSha(app: ApplicationCrd): Promise<string> {
-    const repo = this.getOrCreateRepo(app)
-    let promise = this.getlatestCommitShaPromises[repo.localDir]
-    if (promise != null) {
-      return await promise
+  private dedupe<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    const pending = this.inflight.get(key)
+    if (pending != null) {
+      return pending as Promise<T>
     }
-
-    promise = repo.latestCommit(app.spec.branch)
-    this.getlatestCommitShaPromises[repo.localDir] = promise
-    const latestCommit = await promise
-    delete this.getlatestCommitShaPromises[repo.localDir]
-    return latestCommit
+    const promise = operation().finally(() => this.inflight.delete(key))
+    this.inflight.set(key, promise)
+    return promise
   }
 
-  private fetchPromises: Record<string, Promise<void>> = {}
-  public async fetchRepo(app: ApplicationCrd): Promise<void> {
+  public getLatestCommitSha(app: ApplicationCrd): Promise<string> {
     const repo = this.getOrCreateRepo(app)
-    let promise = this.fetchPromises[repo.localDir]
-    if (promise != null) {
-      await promise
-      return
-    }
-
-    promise = repo.fetch(app.spec.branch)
-    this.fetchPromises[repo.localDir] = promise
-    await promise
-    delete this.fetchPromises[repo.localDir]
+    return this.dedupe(`latestCommit:${repo.localDir}:${app.spec.branch}`, () => repo.latestCommit(app.spec.branch))
   }
 
-  private hasChangesPromises: Record<string, Promise<boolean>> = {}
-  public async hasChanges(app: ApplicationCrd, from: string | undefined, to: string): Promise<boolean> {
+  public fetchRepo(app: ApplicationCrd): Promise<void> {
     const repo = this.getOrCreateRepo(app)
-    let promise = this.hasChangesPromises[repo.localDir]
-    if (promise != null) {
-      return await promise
-    }
-
-    promise = repo.hasChanges(from, to, app.spec.source.path)
-    this.hasChangesPromises[repo.localDir] = promise
-    const hasChanges = await promise
-    delete this.hasChangesPromises[repo.localDir]
-    return hasChanges
+    return this.dedupe(`fetch:${repo.localDir}:${app.spec.branch}`, () => repo.fetch(app.spec.branch))
   }
 
-  private collectManifestsPromises: Record<string, Promise<string[]>> = {}
-  public async collectManifests(app: ApplicationCrd, head: string): Promise<string[]> {
+  public hasChanges(app: ApplicationCrd, from: string | undefined, to: string): Promise<boolean> {
     const repo = this.getOrCreateRepo(app)
-    let promise = this.collectManifestsPromises[repo.localDir]
-    if (promise != null) {
-      return await promise
-    }
+    const path = app.spec.source.path
+    return this.dedupe(`hasChanges:${repo.localDir}:${from ?? ''}:${to}:${path}`, () => repo.hasChanges(from, to, path))
+  }
 
-    promise = new Promise(async (resolve) => {
-      const fileNames = await repo
-        .listFiles(head, app.spec.source.path)
-        .then((files) => files.filter((file) => file.endsWith('.yaml') || file.endsWith('.yml')))
-      const manifests = await Promise.all(fileNames.map((file) => repo.readFile(head, file)))
-      resolve(manifests)
+  public collectManifests(app: ApplicationCrd, head: string): Promise<string[]> {
+    const repo = this.getOrCreateRepo(app)
+    const path = app.spec.source.path
+    return this.dedupe(`collectManifests:${repo.localDir}:${head}:${path}`, async () => {
+      const files = await repo.listFiles(head, path)
+      const fileNames = files.filter((file) => file.endsWith('.yaml') || file.endsWith('.yml'))
+      return Promise.all(fileNames.map((file) => repo.readFile(head, file)))
     })
-    this.collectManifestsPromises[repo.localDir] = promise
-    const manifests = await promise
-    delete this.collectManifestsPromises[repo.localDir]
-    return manifests
   }
 
   public [Symbol.dispose]() {}

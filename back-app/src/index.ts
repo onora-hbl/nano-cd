@@ -9,7 +9,6 @@ async function main() {
   const container = await createContainer()
   const app = buildApp(container)
 
-  // Services are disposed once the HTTP server has stopped
   app.addHook('onClose', () => container[Symbol.asyncDispose]())
 
   let closing: Promise<void> | undefined

@@ -1,12 +1,5 @@
 import { ApiException, PatchStrategy, setHeaderOptions, type KubernetesObject } from '@kubernetes/client-node'
-import {
-  GROUP,
-  PLURAL,
-  VERSION,
-  type ApplicationCrd,
-  type ApplicationStatus,
-  type ApplicationSyncStatus,
-} from './application.js'
+import { GROUP, PLURAL, VERSION, type ApplicationCrd, type ApplicationStatus } from './application.js'
 import { type GitManager } from './GitManager.js'
 import type { K8sInterface } from './K8sInterface.js'
 import logger from './utils/logger.js'
@@ -79,6 +72,12 @@ export class SyncManager implements Disposable {
     return isDeepStrictEqual(this.clean(obj1), this.clean(obj2))
   }
 
+  private applyPriority(object: KubernetesObject): number {
+    if (object.kind === 'Namespace') return 0
+    if (object.kind === 'CustomResourceDefinition') return 1
+    return 2
+  }
+
   private async doSync(app: ApplicationCrd, manifests: string[]) {
     this.childLogger.info(`Syncing application: ${app.metadata.name} with ${manifests.length} manifests`)
     const objects = []
@@ -95,7 +94,7 @@ export class SyncManager implements Disposable {
         }
       }
     }
-    objects.sort((a, b) => (a.kind === 'Namespace' && b.kind !== 'Namespace' ? -1 : 0))
+    objects.sort((a, b) => this.applyPriority(a) - this.applyPriority(b))
     for (const obj of objects) {
       const k8sObjects = await this.getK8sObjects(obj)
       if (

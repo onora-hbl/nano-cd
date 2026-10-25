@@ -42,11 +42,9 @@ export class ApplicationCrdCache implements AsyncDisposable {
       return
     }
     if (app.status?.lastObservedGeneration === app.metadata.generation) {
-      return
+      this.syncScheduler.schedule(app, () => this.syncApp(app.metadata.uid))
     }
-    this.childLogger.debug(`Application updated: ${app.metadata.name}`)
     this.cache.set(app.metadata.uid, app)
-    this.syncScheduler.schedule(app, () => this.syncApp(app.metadata.uid))
   }
 
   private onDelete(app: ApplicationCrd) {

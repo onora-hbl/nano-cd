@@ -22,7 +22,7 @@ export interface ApplicationSpec {
   prune: boolean
 }
 
-export type ApplicationSyncStatus = 'Synced' | 'OutOfSync' | 'Unknown'
+export type ApplicationSyncStatus = 'Synced' | 'OutOfSync' | 'Syncing'
 
 export interface ApplicationStatus {
   lastObservedGeneration?: number

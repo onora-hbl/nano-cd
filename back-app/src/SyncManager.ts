@@ -75,7 +75,7 @@ export class SyncManager implements Disposable {
     return { ...rest, metadata }
   }
 
-  private areK8sObjectsEquivalent(obj1: KubernetesObject, obj2?: KubernetesObject) {
+  private areK8sObjectsEquivalent(obj1: KubernetesObject, obj2: KubernetesObject) {
     return isDeepStrictEqual(this.clean(obj1), this.clean(obj2))
   }
 

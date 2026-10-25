@@ -1,0 +1,7 @@
+Todos
+   1  ○ dry run each manifest
+   2  ○ if no changes, do nothing
+   3  ○ if changes, apply manifests
+   4  ○ and keep inventory
+   5  ○ any error = status and reason
+

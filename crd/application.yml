@@ -83,3 +83,5 @@ spec:
                 lastSyncTime:
                   type: string
                   format: date-time
+                inventory:
+                  type: array

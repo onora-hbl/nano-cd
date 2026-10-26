@@ -132,12 +132,16 @@ export class SyncManager implements Disposable {
     this.childLogger.debug(`New commit detected for application: ${app.metadata.name}, syncing...`)
     await this.updateStatus(app, {
       syncStatus: 'Syncing',
+      lastSyncStartTime: new Date().toISOString(),
     })
     await this.doSyncIfFileChanges(app, latestCommitSha)
     await this.updateStatus(app, {
       syncStatus: 'Synced',
       lastSyncedCommit: latestCommitSha,
-      lastSyncTime: new Date().toISOString(),
+      lastSyncEndTime: new Date().toISOString(),
+      reason: 'SyncCompleted',
+      message: `Application synced successfully at commit ${latestCommitSha}`,
+      errors: [],
     })
   }
 

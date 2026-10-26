@@ -24,11 +24,29 @@ export interface ApplicationSpec {
 
 export type ApplicationSyncStatus = 'Synced' | 'OutOfSync' | 'Syncing'
 
+export interface K8sObjectRef {
+  apiVersion: string
+  kind: string
+  namespace?: string
+  name: string
+}
+
+export interface ApplicationStatusError {
+  step: string
+  message: string
+  object?: K8sObjectRef
+}
+
 export interface ApplicationStatus {
   lastObservedGeneration?: number
   syncStatus?: ApplicationSyncStatus
   lastSyncedCommit?: string
-  lastSyncTime?: Timestamp
+  lastSyncStartTime?: Timestamp
+  lastSyncEndTime?: Timestamp
+  reason?: string
+  message?: string
+  errors?: ApplicationStatusError[]
+  inventory: K8sObjectRef[]
 }
 
 export interface ApplicationCrd extends KubernetesObject {

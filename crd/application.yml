@@ -75,13 +75,54 @@ spec:
               properties:
                 lastObservedGeneration:
                   type: number
+                lastSyncedCommit:
+                  type: string
+                lastSyncStartTime:
+                  type: string
+                  format: date-time
+                lastSyncEndTime:
+                  type: string
+                  format: date-time
                 syncStatus:
                   type: string
                   enum: [Synced, OutOfSync, Syncing]
-                lastSyncedCommit:
-                  type: string
-                lastSyncTime:
-                  type: string
-                  format: date-time
                 inventory:
                   type: array
+                  items:
+                    type: object
+                    required: [apiVersion, kind, name]
+                    properties:
+                      apiVersion:
+                        type: string
+                      kind:
+                        type: string
+                      namespace:
+                        type: string
+                      name:
+                        type: string
+                reason:
+                  type: string
+                message:
+                  type: string
+                errors:
+                  type: array
+                  items:
+                    type: object
+                    required: [step, message]
+                    properties:
+                      step:
+                        type: string
+                      message:
+                        type: string
+                      object:
+                        type: object
+                        required: [apiVersion, kind, name]
+                        properties:
+                          apiVersion:
+                            type: string
+                          kind:
+                            type: string
+                          namespace:
+                            type: string
+                          name:
+                            type: string

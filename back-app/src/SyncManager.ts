@@ -1,10 +1,27 @@
 import { ApiException, PatchStrategy, setHeaderOptions, type KubernetesObject } from '@kubernetes/client-node'
-import { GROUP, PLURAL, VERSION, type ApplicationCrd, type ApplicationStatus } from './application.js'
+import {
+  GROUP,
+  PLURAL,
+  VERSION,
+  type ApplicationCrd,
+  type ApplicationStatus,
+  type ApplicationStatusError,
+} from './application.js'
 import { type GitManager } from './GitManager.js'
 import type { K8sInterface } from './K8sInterface.js'
 import logger from './utils/logger.js'
 import { parseAllDocuments } from 'yaml'
 import { isDeepStrictEqual } from 'node:util'
+
+class SyncError extends Error {
+  constructor(
+    public override message: string,
+    public reason: string,
+    public errors: ApplicationStatusError[],
+  ) {
+    super(message)
+  }
+}
 
 export class SyncManager implements Disposable {
   private childLogger
@@ -126,19 +143,18 @@ export class SyncManager implements Disposable {
   private async doSyncIfNewCommit(app: ApplicationCrd) {
     const latestCommitSha = await this.gitManager.getLatestCommitSha(app)
     if (latestCommitSha === app.status?.lastSyncedCommit) {
+      await this.updateStatus(app, {
+        reason: 'SyncCompleted',
+        message: `Application synced successfully at commit ${latestCommitSha}`,
+        errors: [],
+      })
       this.childLogger.debug(`No new commit for application: ${app.metadata.name}`)
       return
     }
     this.childLogger.debug(`New commit detected for application: ${app.metadata.name}, syncing...`)
-    await this.updateStatus(app, {
-      syncStatus: 'Syncing',
-      lastSyncStartTime: new Date().toISOString(),
-    })
     await this.doSyncIfFileChanges(app, latestCommitSha)
     await this.updateStatus(app, {
-      syncStatus: 'Synced',
       lastSyncedCommit: latestCommitSha,
-      lastSyncEndTime: new Date().toISOString(),
       reason: 'SyncCompleted',
       message: `Application synced successfully at commit ${latestCommitSha}`,
       errors: [],
@@ -151,14 +167,44 @@ export class SyncManager implements Disposable {
     }
     this.syncInProgress.add(app.metadata.uid)
 
+    await this.updateStatus(app, {
+      syncStatus: 'Syncing',
+      lastSyncStartTime: new Date().toISOString(),
+    })
     try {
       this.childLogger.debug(`Syncing application: ${app.metadata.name}`)
       await this.doSyncIfNewCommit(app)
+      await this.updateStatus(app, {
+        syncStatus: 'Synced',
+        lastSyncEndTime: new Date().toISOString(),
+      })
       this.childLogger.debug(`Finished syncing application: ${app.metadata.name}`)
+    } catch (err) {
+      logger.error({ err }, `Error syncing application: ${app.metadata.name}`)
+      if (err instanceof SyncError) {
+        await this.updateStatus(app, {
+          syncStatus: 'OutOfSync',
+          reason: err.reason,
+          message: toStatusMessage(err.message),
+          errors: err.errors.map((e) => ({ ...e, message: toStatusMessage(e.message) })),
+        })
+      } else {
+        await this.updateStatus(app, {
+          syncStatus: 'OutOfSync',
+          reason: 'ErrorDuringSync',
+          message: toStatusMessage((err as Error).message),
+          errors: [],
+        })
+      }
     } finally {
       this.syncInProgress.delete(app.metadata.uid)
     }
   }
 
   public [Symbol.dispose]() {}
+}
+
+function toStatusMessage(text: string, maxLength = 1024): string {
+  const singleLine = text.replace(/\s+/g, ' ').trim()
+  return singleLine.length > maxLength ? `${singleLine.slice(0, maxLength - 1)}…` : singleLine
 }

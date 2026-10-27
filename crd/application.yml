@@ -24,9 +24,9 @@ spec:
         - name: Commit
           type: string
           jsonPath: .status.lastSyncedCommit
-        - name: Last Sync
+        - name: Last Succedeed Sync
           type: date
-          jsonPath: .status.lastSyncTime
+          jsonPath: .status.lastSyncEndTime
       schema:
         openAPIV3Schema:
           type: object

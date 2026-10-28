@@ -6,6 +6,7 @@ import {
   type ApplicationCrd,
   type ApplicationStatus,
   type ApplicationStatusError,
+  type K8sObjectRef,
 } from './application.js'
 import { type GitManager } from './GitManager.js'
 import type { K8sInterface } from './K8sInterface.js'
@@ -65,7 +66,7 @@ export class SyncManager implements Disposable {
     return 2
   }
 
-  private async treatObject(obj: any) {
+  private async treatObject(obj: any): Promise<K8sObjectRef> {
     let actualRes = null
     try {
       actualRes = await this.k8sInterface.ObjectApi.read(obj)
@@ -82,9 +83,15 @@ export class SyncManager implements Disposable {
     } else {
       this.childLogger.info(`Applied object ${obj.kind}/${obj.metadata.name} in namespace ${obj.metadata.namespace}`)
     }
+    return {
+      apiVersion: appliedRes.apiVersion,
+      kind: appliedRes.kind,
+      namespace: appliedRes.metadata?.namespace,
+      name: appliedRes.metadata?.name,
+    }
   }
 
-  private async doSync(app: ApplicationCrd, manifests: string[]) {
+  private async doSync(app: ApplicationCrd, manifests: string[]): Promise<K8sObjectRef[]> {
     this.childLogger.info(`Syncing application: ${app.metadata.name} with ${manifests.length} manifests`)
     const objects = []
     for (const manifest of manifests) {
@@ -102,12 +109,14 @@ export class SyncManager implements Disposable {
     }
     objects.sort((a, b) => this.applyPriority(a) - this.applyPriority(b))
     const errors: ApplicationStatusError[] = []
+    const k8sObjectRefs: K8sObjectRef[] = []
     for (const obj of objects) {
       obj.metadata ??= {}
       obj.metadata.labels ??= {}
       obj.metadata.labels['nano-cd/application'] = app.metadata.name
       try {
-        await this.treatObject(obj)
+        const res = await this.treatObject(obj)
+        k8sObjectRefs.push(res)
       } catch (e) {
         if (e instanceof ApiException) {
           errors.push({
@@ -131,24 +140,25 @@ export class SyncManager implements Disposable {
           })
         }
       }
-      if (errors.length > 0) {
-        throw new SyncError('Errors occurred during manifest application', 'ManifestApplyError', errors)
-      }
     }
+    if (errors.length > 0) {
+      throw new SyncError('Errors occurred during manifest application', 'ManifestApplyError', errors)
+    }
+    return k8sObjectRefs
   }
 
-  private async doSyncIfFileChanges(app: ApplicationCrd, latestCommitSha: string) {
+  private async doSyncIfFileChanges(app: ApplicationCrd, latestCommitSha: string): Promise<K8sObjectRef[] | null> {
     await this.gitManager.fetchRepo(app)
     if (!(await this.gitManager.hasChanges(app, app.status?.lastSyncedCommit, latestCommitSha))) {
       this.childLogger.debug(`No file changes for application: ${app.metadata.name}`)
-      return
+      return null
     }
     const manifests = await this.gitManager.collectManifests(app, latestCommitSha)
     if (manifests.length === 0) {
       this.childLogger.debug(`No manifests found for application: ${app.metadata.name}`)
-      return
+      return null
     }
-    await this.doSync(app, manifests)
+    return await this.doSync(app, manifests)
   }
 
   private async doSyncIfNewCommit(app: ApplicationCrd) {
@@ -163,12 +173,14 @@ export class SyncManager implements Disposable {
       return
     }
     this.childLogger.debug(`New commit detected for application: ${app.metadata.name}, syncing...`)
-    await this.doSyncIfFileChanges(app, latestCommitSha)
+    const res = await this.doSyncIfFileChanges(app, latestCommitSha)
+    const newInventory = res ?? app.status?.inventory ?? []
     await this.updateStatus(app, {
       lastSyncedCommit: latestCommitSha,
       reason: 'SyncCompleted',
       message: `Application synced successfully at commit ${latestCommitSha}`,
       errors: [],
+      inventory: newInventory,
     })
   }
 

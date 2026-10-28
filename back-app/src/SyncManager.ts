@@ -12,7 +12,6 @@ import { type GitManager } from './GitManager.js'
 import type { K8sInterface } from './K8sInterface.js'
 import logger from './utils/logger.js'
 import { parseAllDocuments } from 'yaml'
-import { isDeepStrictEqual } from 'node:util'
 
 export class SyncError extends Error {
   constructor(
@@ -147,6 +146,57 @@ export class SyncManager implements Disposable {
     return k8sObjectRefs
   }
 
+  private async prune(lastInventory: K8sObjectRef[], newInventory: K8sObjectRef[]) {
+    const toPrune = []
+    for (const obj of lastInventory) {
+      if (
+        !newInventory.some(
+          (newObj) =>
+            newObj.apiVersion === obj.apiVersion &&
+            newObj.kind === obj.kind &&
+            newObj.namespace === obj.namespace &&
+            newObj.name === obj.name,
+        )
+      ) {
+        toPrune.push(obj)
+      }
+    }
+    toPrune.sort((a, b) => this.applyPriority(a) - this.applyPriority(b))
+    toPrune.reverse()
+    const errors: ApplicationStatusError[] = []
+    for (const obj of toPrune) {
+      try {
+        this.childLogger.info(`Pruning object ${obj.kind}/${obj.name} in namespace ${obj.namespace}`)
+        await this.k8sInterface.ObjectApi.delete({
+          apiVersion: obj.apiVersion,
+          kind: obj.kind,
+          metadata: {
+            name: obj.name,
+            namespace: obj.namespace ?? 'default',
+          },
+        })
+      } catch (e) {
+        if (e instanceof ApiException && e.code === 404) {
+          continue
+        }
+        if (e instanceof ApiException) {
+          errors.push({
+            message: e.body?.message ?? e.message,
+            object: obj,
+          })
+        } else {
+          errors.push({
+            message: (e as Error).message,
+            object: obj,
+          })
+        }
+      }
+    }
+    if (errors.length > 0) {
+      throw new SyncError('Errors occurred during pruning', 'PruneError', errors)
+    }
+  }
+
   private async doSyncIfFileChanges(app: ApplicationCrd, latestCommitSha: string): Promise<K8sObjectRef[] | null> {
     await this.gitManager.fetchRepo(app)
     if (!(await this.gitManager.hasChanges(app, app.status?.lastSyncedCommit, latestCommitSha))) {
@@ -158,7 +208,13 @@ export class SyncManager implements Disposable {
       this.childLogger.debug(`No manifests found for application: ${app.metadata.name}`)
       return null
     }
-    return await this.doSync(app, manifests)
+    const newInventory = await this.doSync(app, manifests)
+
+    if (app.spec.prune) {
+      await this.prune(app.status?.inventory ?? [], newInventory)
+    }
+
+    return newInventory
   }
 
   private async doSyncIfNewCommit(app: ApplicationCrd) {

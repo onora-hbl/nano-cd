@@ -32,7 +32,6 @@ export interface K8sObjectRef {
 }
 
 export interface ApplicationStatusError {
-  step: string
   message: string
   object?: K8sObjectRef
 }

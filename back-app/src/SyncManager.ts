@@ -13,7 +13,7 @@ import logger from './utils/logger.js'
 import { parseAllDocuments } from 'yaml'
 import { isDeepStrictEqual } from 'node:util'
 
-class SyncError extends Error {
+export class SyncError extends Error {
   constructor(
     public override message: string,
     public reason: string,
@@ -48,26 +48,6 @@ export class SyncManager implements Disposable {
     )
   }
 
-  private async getK8sObjects(object: any) {
-    const dryRunRes = await this.k8sInterface.ObjectApi.patch(
-      object,
-      undefined,
-      'All',
-      'nano-cd',
-      true,
-      PatchStrategy.ServerSideApply,
-    )
-    let actualRes = null
-    try {
-      actualRes = await this.k8sInterface.ObjectApi.read(object)
-    } catch (err) {
-      if (!(err instanceof ApiException && err.code === 404)) {
-        throw err
-      }
-    }
-    return { dryRunRes, actualRes }
-  }
-
   private async applyObject(object: any) {
     return await this.k8sInterface.ObjectApi.patch(
       object,
@@ -79,20 +59,29 @@ export class SyncManager implements Disposable {
     )
   }
 
-  private clean(object: KubernetesObject): unknown {
-    const { status, ...rest } = object as KubernetesObject & { status?: unknown }
-    const { managedFields, resourceVersion, generation, creationTimestamp, uid, ...metadata } = rest.metadata ?? {}
-    return { ...rest, metadata }
-  }
-
-  private areK8sObjectsEquivalent(obj1: KubernetesObject, obj2: KubernetesObject) {
-    return isDeepStrictEqual(this.clean(obj1), this.clean(obj2))
-  }
-
   private applyPriority(object: KubernetesObject): number {
     if (object.kind === 'Namespace') return 0
     if (object.kind === 'CustomResourceDefinition') return 1
     return 2
+  }
+
+  private async treatObject(obj: any) {
+    let actualRes = null
+    try {
+      actualRes = await this.k8sInterface.ObjectApi.read(obj)
+    } catch (err) {
+      if (!(err instanceof ApiException && err.code === 404)) {
+        throw err
+      }
+    }
+    const appliedRes = await this.applyObject(obj)
+    if (actualRes != null && actualRes.metadata?.resourceVersion === appliedRes.metadata?.resourceVersion) {
+      this.childLogger.debug(
+        `No changes for object ${obj.kind}/${obj.metadata.name} in namespace ${obj.metadata.namespace}`,
+      )
+    } else {
+      this.childLogger.info(`Applied object ${obj.kind}/${obj.metadata.name} in namespace ${obj.metadata.namespace}`)
+    }
   }
 
   private async doSync(app: ApplicationCrd, manifests: string[]) {
@@ -112,17 +101,36 @@ export class SyncManager implements Disposable {
       }
     }
     objects.sort((a, b) => this.applyPriority(a) - this.applyPriority(b))
+    const errors: ApplicationStatusError[] = []
     for (const obj of objects) {
-      const k8sObjects = await this.getK8sObjects(obj)
-      if (
-        k8sObjects.actualRes !== null &&
-        this.areK8sObjectsEquivalent(k8sObjects.dryRunRes as KubernetesObject, k8sObjects.actualRes as KubernetesObject)
-      ) {
-        this.childLogger.info(`Skipping object ${obj.kind}/${obj.metadata.name} in namespace ${obj.metadata.namespace}`)
-        continue
+      try {
+        await this.treatObject(obj)
+      } catch (e) {
+        if (e instanceof ApiException) {
+          errors.push({
+            message: e.body?.message ?? e.message,
+            object: {
+              apiVersion: obj.apiVersion,
+              kind: obj.kind,
+              namespace: obj.metadata?.namespace,
+              name: obj.metadata?.name,
+            },
+          })
+        } else {
+          errors.push({
+            message: (e as Error).message,
+            object: {
+              apiVersion: obj.apiVersion,
+              kind: obj.kind,
+              namespace: obj.metadata?.namespace,
+              name: obj.metadata?.name,
+            },
+          })
+        }
       }
-      const res = await this.applyObject(obj)
-      this.childLogger.info(`Applied object ${obj.kind}/${obj.metadata.name} in namespace ${obj.metadata.namespace}`)
+      if (errors.length > 0) {
+        throw new SyncError('Errors occurred during manifest application', 'ManifestApplyError', errors)
+      }
     }
   }
 

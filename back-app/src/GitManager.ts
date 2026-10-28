@@ -5,6 +5,7 @@ import type { ApplicationCrd } from './application.js'
 import { existsSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
+import { SyncError } from './SyncManager.js'
 
 const exec = promisify(execFile)
 
@@ -67,8 +68,12 @@ class GitRepo {
   }
 
   private async git(...args: string[]): Promise<string> {
-    const { stdout } = await exec('git', args, { env: this.env(), maxBuffer: 64 * 1024 * 1024 })
-    return stdout.trim()
+    try {
+      const { stdout } = await exec('git', args, { env: this.env(), maxBuffer: 64 * 1024 * 1024 })
+      return stdout.trim()
+    } catch (e) {
+      throw new SyncError((e as Error).message ?? 'Unknown error', 'GitError', [])
+    }
   }
 
   private env(): NodeJS.ProcessEnv {

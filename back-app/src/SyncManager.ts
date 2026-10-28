@@ -103,6 +103,9 @@ export class SyncManager implements Disposable {
     objects.sort((a, b) => this.applyPriority(a) - this.applyPriority(b))
     const errors: ApplicationStatusError[] = []
     for (const obj of objects) {
+      obj.metadata ??= {}
+      obj.metadata.labels ??= {}
+      obj.metadata.labels['nano-cd/application'] = app.metadata.name
       try {
         await this.treatObject(obj)
       } catch (e) {
